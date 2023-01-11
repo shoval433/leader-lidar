@@ -1,0 +1,212 @@
+pipeline{
+
+    // triggers{
+    //     pollSCM '* * * * *'
+    // }
+
+    options {
+        timestamps()
+        gitLabConnection('my-repo') 
+      
+    }
+    
+    tools {
+        maven 'my-work-maven'
+        jdk 'java-8-work'
+    }
+    environment{
+         def ver_simulator=""
+         def ver_analytics=""
+         def ver_telemetry=""
+    }
+    agent any
+    stages{
+        stage("chekout"){
+            steps{
+                echo "========executing chekout========"
+                deleteDir()
+                checkout scm
+            }
+        }
+        stage("is release"){
+             when{
+                anyOf {
+                    branch "release/*"
+                }
+            } 
+            steps{
+                script{
+                    sh "mvn package"
+                }
+            }
+            
+        }
+        stage("calc latest tag"){
+            when{
+             anyOf {
+                    branch "release/*"
+                    
+                }
+            }
+            steps{
+                script{
+                    echo "=========================================executing calc latest tag========================================="
+                    Ver_Br=sh (script: "echo $GIT_BRANCH | cut -d '/' -f2",
+                    returnStdout: true).trim()
+
+
+                    //telemetry
+                    sh "mkdir c && cd c && jf rt dl libs-release-local/com/lidar/telemetry/ && ls"
+                     echo "------------------------------------------"
+                    sh "cd c/com/lidar/telemetry/ && ls "
+                    echo "------------------------------------------"
+                    def path_telemetry= sh (script: "echo 'c/com/lidar/telemetry/'",
+                    returnStdout: true).trim()
+                    echo "${path_telemetry}"
+                    ver_telemetry=sh (script: "bash where_ver2.sh ${path_telemetry} ${Ver_Br}",
+                    returnStdout: true).trim()
+                    echo "${ver_telemetry}"
+
+
+                     //analytics
+                    sh "mkdir a && cd a && jf rt dl libs-release-local/com/lidar/analytics/ && ls"
+                     echo "------------------------------------------"
+                    sh "cd a/com/lidar/analytics/ && ls "
+                    echo "------------------------------------------"
+                    def path_analytics= sh (script: "echo 'a/com/lidar/analytics/'",
+                    returnStdout: true).trim()
+                    echo "${path_analytics}"
+                    ver_analytics=sh (script: "bash where_ver2.sh ${path_analytics} ${Ver_Br}",
+                    returnStdout: true).trim()
+                    echo "${ver_analytics}"
+
+
+
+                    //simulator
+                    sh "mkdir b && cd b && jf rt dl libs-release-local/com/lidar/simulator/ && ls"
+                    echo "------------------------------------------"
+                    sh "cd b/com/lidar/simulator/ && ls "
+                    echo "------------------------------------------"
+                    def path_simulator= sh (script: "echo 'b/com/lidar/simulator/'",
+                    returnStdout: true).trim()
+                    echo "${path_simulator}"
+                    ver_simulator=sh (script: "bash where_ver2.sh ${path_simulator} ${Ver_Br}",
+                    returnStdout: true).trim()
+                    echo "${ver_simulator}"
+
+
+                    
+                }
+            }
+            
+        }
+        stage("e2e test"){
+             when{
+                anyOf {
+                    branch "release/*"
+                }
+                
+            } 
+            steps{
+                script{
+                    echo "=========================================executing e2e test========================================="
+                    ver_simulator1=sh (script: "echo ${ver_simulator}",
+                    returnStdout: true).trim()
+                    echo "${ver_simulator1}"
+                    withCredentials([usernamePassword(credentialsId: 'artifactory-login', passwordVariable: 'the_pass', usernameVariable: 'the_use')]){
+                    sh "cd target && curl -u ${the_use}:${the_pass} -XGET http://43.0.20.203:8082/artifactory/libs-release-local/com/lidar/simulator/${ver_simulator1}/simulator-${ver_simulator1}.jar --output simulator-${ver_simulator1}.jar "
+                    }
+                    sh "cd target && ls "
+                    echo "------------------------------------------------------------"
+                   
+                    sh "cd target && unzip leader-product-*-leader-lidar.zip"
+
+                    thefile1=sh (script: "cd target && ls | grep -i analytics",
+                    returnStdout: true).trim()
+                    thefile2=sh (script: "cd target && ls | grep -i telemetry",
+                    returnStdout: true).trim()
+                    try{
+                    sh "cd target && java -cp simulator-${ver_simulator1}.jar:${thefile2}:${thefile1} com.lidar.simulation.Simulator"
+                    }
+                    catch(err){
+                        erro("There is no suitable version for testing")
+                        
+                    }
+                }
+            }
+            
+        }
+
+//
+        stage("release bulid img"){
+            when{
+                anyOf {
+                    branch "release/*"
+                }
+            }
+            steps{
+                echo "=========================================executing bulid img========================================="
+                script{
+                    ver_telemetry1=sh (script: "echo ${ver_telemetry}",
+                    returnStdout: true).trim()
+                    echo "${ver_telemetry1}"
+
+                    ver_analytics1=sh (script: "echo ${ver_analytics}",
+                    returnStdout: true).trim()
+                    echo "${ver_analytics1}"
+
+
+
+
+                    Ver_Br=sh (script: "echo $GIT_BRANCH | cut -d '/' -f2",
+                    returnStdout: true).trim()
+
+                    echo "${Ver_Br}"
+
+                    Ver_Calc=sh (script: "bash calc.sh ${Ver_Br}",
+                    returnStdout: true).trim()
+                    echo "${Ver_Calc}"
+
+                    sh "mvn versions:set -DnewVersion=${Ver_Calc}"
+                    
+                    try{
+                        configFileProvider([configFile(fileId: 'my_settings.xml', variable: 'set')]) {
+                        sh "mvn -s ${set} versions:set-property -Dproperty=telemetry.version -DnewVersion=${ver_telemetry1}"
+                        sh "mvn -s ${set} versions:set-property -Dproperty=analytics.version -DnewVersion=${ver_analytics1}"
+                        sh "mvn -s ${set} deploy "
+                        sh "mvn dependency:list"
+                    }
+                    }
+                     catch(err){
+                        erro("There is no suitable version for deploy")
+                        
+                    }
+                    withCredentials([gitUsernamePassword(credentialsId: '2053d2c3-e0ab-4686-b031-9a1970106e8d', gitToolName: 'Default')]){
+                       
+                        sh "git tag $Ver_Calc"
+                        sh "git push origin $Ver_Calc"
+                   
+                    }
+                }
+        }
+    }
+    
+}
+    
+    post{
+        success{
+            script{
+                echo "that success!!!"
+               
+            }
+        }
+        failure {
+            
+            script{
+                echo "YOU ARE A FAILURE"
+             }
+
+            
+        }
+    }
+}

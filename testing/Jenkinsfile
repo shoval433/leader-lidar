@@ -1,0 +1,158 @@
+pipeline{
+
+    // triggers{
+    //     pollSCM '* * * * *'
+    // }
+
+    options {
+        timestamps()
+        gitLabConnection('my-repo') 
+      
+    }
+    
+      tools {
+        maven 'my-work-maven'
+        jdk 'java-8-work'
+    }
+    environment{
+        Ver_test2="2.9"
+    }
+    agent any
+    stages{
+        stage("chekout"){
+            steps{
+                echo "========executing chekout========"
+                deleteDir()
+                checkout scm
+            }
+        }
+        stage("calc latest tag"){
+            when{
+             anyOf {
+                
+                    branch "main"
+                }
+            }
+            steps{
+                script{
+                    sh "mkdir a && cd a && jf rt dl libs-release-local/com/lidar/analytics/ && ls"
+                     echo "------------------------------------------"
+                    sh "cd a/com/lidar/analytics/ && ls "
+                    echo "------------------------------------------"
+                    def path_analytics= sh (script: "echo 'a/com/lidar/analytics/'",
+                    returnStdout: true).trim()
+                    echo "${path_analytics}"
+                    ver_analytics=sh (script: "bash where_ver.sh ${path_analytics}",
+                    returnStdout: true).trim()
+                    echo "${ver_analytics}"
+                    
+
+
+                    sh "mkdir b && cd b && jf rt dl libs-release-local/com/lidar/telemetry/ && ls"
+                    echo "------------------------------------------"
+                    sh "cd b/com/lidar/telemetry/ && ls "
+                    echo "------------------------------------------"
+                    def path_telemetry= sh (script: "echo 'b/com/lidar/telemetry/'",
+                    returnStdout: true).trim()
+                    echo "${path_telemetry}"
+                    ver_telemetry=sh (script: "bash where_ver.sh ${path_telemetry}",
+                    returnStdout: true).trim()
+                    echo "${ver_telemetry}"
+                    
+                }
+            }
+            
+        }
+        stage("testing e2e"){
+            when{
+                anyOf {
+                    branch "main"
+                    branch "master"
+                }
+            }
+            steps{
+                 script{
+                    sh "mvn package"
+                    try{
+                    ver_telemetry1=sh (script: "echo ${ver_telemetry}",
+                    returnStdout: true).trim()
+                    echo "${ver_telemetry1}"
+
+                    ver_analytics1=sh (script: "echo ${ver_analytics}",
+                    returnStdout: true).trim()
+                    echo "${ver_analytics1}"
+                    withCredentials([usernamePassword(credentialsId: 'artifactory-login', passwordVariable: 'the_pass', usernameVariable: 'the_use')]){
+                    sh "cd target && curl -u ${the_use}:${the_pass} -XGET http://43.0.20.203:8082/artifactory/libs-release-local/com/lidar/telemetry/${ver_telemetry1}/telemetry-${ver_telemetry1}.jar --output telemetry-${ver_telemetry1}.jar "
+                    sh "cd target && curl -u ${the_use}:${the_pass} -XGET http://43.0.20.203:8082/artifactory/libs-release-local/com/lidar/analytics/${ver_analytics1}/analytics-${ver_analytics1}.jar --output analytics-${ver_analytics1}.jar "
+                    sh "cd target && ls "
+                    }
+                    echo "------------------------------------------------------------"
+                    thefile=sh (script: "cd target && ls | grep -i simulator",
+                    returnStdout: true).trim()
+                    sh "cd target && java -cp ${thefile}:telemetry-${ver_telemetry1}.jar:analytics-${ver_analytics1}.jar com.lidar.simulation.Simulator"
+                    }
+                    catch(err){
+                        withCredentials([usernamePassword(credentialsId: 'artifactory-login', passwordVariable: 'the_pass', usernameVariable: 'the_use')]){
+                        sh "cd target && curl -u ${the_use}:${the_pass} -XGET http://43.0.20.203:8082/artifactory/libs-snapshot-local/com/lidar/analytics/99-SNAPSHOT/analytics-99-20230110.082303-1.jar --output analytics-99-20230110.082303-1.jar "
+                        sh "cd target && curl -u ${the_use}:${the_pass} -XGET http://43.0.20.203:8082/artifactory/libs-snapshot-local/com/lidar/telemetry/99-SNAPSHOT/telemetry-99-20230110.091943-2.jar --output telemetry-99-20230110.091943-2.jar "
+                        }
+                        thefile=sh (script: "cd target && ls | grep -i telemetry",
+                        returnStdout: true).trim()
+                        echo "------------------------------------------------------------"
+                        sh "cd target && java -cp analytics-99-20230110.082303-1.jar:${thefile}:telemetry-99-20230110.091943-2.jar com.lidar.simulation.Simulator"
+
+                    }
+                    
+
+                }
+            }
+        }
+
+        stage("bulid img"){
+            when{
+                anyOf {
+                    branch "main"
+                    branch "master"
+                }
+            }
+            steps{
+                echo "========executing bulid img========"
+                script{
+                    
+                    Ver_Br="${Ver_test2}"
+                    echo "${Ver_Br}"
+
+                    Ver_Calc=sh (script: "bash calc.sh ${Ver_Br}",
+                    returnStdout: true).trim()
+                    echo "${Ver_Calc}"
+
+                 
+                    sh "mvn versions:set -DnewVersion=${Ver_Calc}"
+
+                    configFileProvider([configFile(fileId: 'my_settings.xml', variable: 'set')]) {
+                    
+                    sh "mvn -s ${set} deploy "
+                    }
+                }
+            }
+        }
+    }
+    
+    
+    post{
+        success{
+            script{
+                echo "yes"
+               
+            }
+        }
+        failure {
+            
+            script{
+                echo "no"
+             }
+
+            
+        }
+    }
+}

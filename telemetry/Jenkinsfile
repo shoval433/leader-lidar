@@ -1,0 +1,239 @@
+pipeline{
+
+    // triggers{
+    //     pollSCM '* * * * *'
+    // }
+
+    options {
+        timestamps()
+        gitLabConnection('my-repo') 
+      
+    }
+    
+    tools {
+        maven 'my-work-maven'
+        jdk 'java-8-work'
+    }
+    environment{
+        def Fcommit=""
+        def ver_analytics=""
+        def ver_simulator=""
+    }
+    agent any
+    stages{
+        stage("chekout"){
+            steps{
+                echo "========executing chekout========"
+                deleteDir()
+                checkout scm
+            }
+        }
+        stage("is Feature"){
+             when{
+                expression{
+                    return GIT_BRANCH.contains('feature/') 
+                }
+            }
+            steps{
+                script{
+                    
+                    sh "mvn package"
+                    Fcommit=sh (script: "git show -s --format=%s",
+                    returnStdout: true).trim()
+                }
+            }
+        }
+        stage("is main/master/release"){
+             when{
+                anyOf {
+                    branch "main"
+                    branch "master"
+                    branch "release/*"
+                }
+            } 
+            steps{
+                script{
+                    sh "mvn package"
+                }
+            }
+            
+        }
+        stage("calc latest tag for feature"){
+            when{
+             anyOf {
+                    branch "feature/*"
+                }
+            }
+            steps{
+                script{
+                    sh "mkdir a && cd a && jf rt dl libs-release-local/com/lidar/analytics/ && ls"
+                     echo "------------------------------------------"
+                    sh "cd a/com/lidar/analytics/ && ls "
+                    echo "------------------------------------------"
+                    def path_analytics= sh (script: "echo 'a/com/lidar/analytics/'",
+                    returnStdout: true).trim()
+                    echo "${path_analytics}"
+                    ver_analytics=sh (script: "bash where_ver.sh ${path_analytics}",
+                    returnStdout: true).trim()
+                    echo "${ver_analytics}"
+                    
+
+
+                    sh "mkdir b && cd b && jf rt dl libs-release-local/com/lidar/simulator/ && ls"
+                    echo "------------------------------------------"
+                    sh "cd b/com/lidar/simulator/ && ls "
+                    echo "------------------------------------------"
+                    def path_simulator= sh (script: "echo 'b/com/lidar/simulator/'",
+                    returnStdout: true).trim()
+                    echo "${path_simulator}"
+                    ver_simulator=sh (script: "bash where_ver.sh ${path_simulator}",
+                    returnStdout: true).trim()
+                    echo "${ver_simulator}"
+                    
+                }
+            }
+            
+        }
+        stage("calc latest tag for release/"){
+            when{
+             anyOf {
+                    branch "release/*"
+                }
+            }
+            steps{
+                script{
+                    Ver_Br=sh (script: "echo $GIT_BRANCH | cut -d '/' -f2",
+                    returnStdout: true).trim()
+
+                    sh "mkdir a && cd a && jf rt dl libs-release-local/com/lidar/analytics/ && ls"
+                     echo "------------------------------------------"
+                    sh "cd a/com/lidar/analytics/ && ls "
+                    echo "------------------------------------------"
+                    def path_analytics= sh (script: "echo 'a/com/lidar/analytics/'",
+                    returnStdout: true).trim()
+                    echo "${path_analytics}"
+                    ver_analytics=sh (script: "bash where_ver2.sh ${path_analytics} ${Ver_Br}",
+                    returnStdout: true).trim()
+                    echo "${ver_analytics}"
+                    
+
+
+                    sh "mkdir b && cd b && jf rt dl libs-release-local/com/lidar/simulator/ && ls"
+                    echo "------------------------------------------"
+                    sh "cd b/com/lidar/simulator/ && ls "
+                    echo "------------------------------------------"
+                    def path_simulator= sh (script: "echo 'b/com/lidar/simulator/'",
+                    returnStdout: true).trim()
+                    echo "${path_simulator}"
+                    ver_simulator=sh (script: "bash where_ver2.sh ${path_simulator} ${Ver_Br}",
+                    returnStdout: true).trim()
+                    echo "${ver_simulator}"
+                    
+                }
+            }
+            
+        }
+        stage("Testing2"){
+             when{
+                expression{
+                    return GIT_BRANCH.contains('feature/') && Fcommit.contains("#e2e") || GIT_BRANCH.contains('release/') 
+                }
+                
+            } 
+            steps{
+                script{
+                    try{
+                        ver_simulator1=sh (script: "echo ${ver_simulator}",
+                        returnStdout: true).trim()
+                        echo "${ver_simulator1}"
+
+                        ver_analytics1=sh (script: "echo ${ver_analytics}",
+                        returnStdout: true).trim()
+                        echo "${ver_analytics1}"
+                        withCredentials([usernamePassword(credentialsId: 'artifactory-login', passwordVariable: 'the_pass', usernameVariable: 'the_use')]){
+                        sh "cd target && curl -u ${the_use}:${the_pass}  -XGET http://43.0.20.203:8082/artifactory/libs-release-local/com/lidar/simulator/${ver_simulator1}/simulator-${ver_simulator1}.jar --output simulator-${ver_simulator1}.jar "
+                        sh "cd target && curl -u ${the_use}:${the_pass}  -XGET http://43.0.20.203:8082/artifactory/libs-release-local/com/lidar/analytics/${ver_analytics1}/analytics-${ver_analytics1}.jar --output analytics-${ver_analytics1}.jar "
+                        }
+                        sh "cd target && ls "
+                        thefile=sh (script: "cd target && ls | grep -i telemetry",
+                        returnStdout: true).trim()
+                        echo "------------------------------------------------------------"
+                        sh "cd target && java -cp simulator-${ver_simulator1}.jar:${thefile}:analytics-${ver_analytics1}.jar com.lidar.simulation.Simulator"
+                    }
+                    catch(err){
+                        withCredentials([usernamePassword(credentialsId: 'artifactory-login', passwordVariable: 'the_pass', usernameVariable: 'the_use')]){
+                        sh "cd target && curl -u ${the_use}:${the_pass} -XGET http://43.0.20.203:8082/artifactory/libs-snapshot-local/com/lidar/simulator/99-SNAPSHOT/simulator-99-20230110.082510-1.jar --output simulator-99-20230110.082510-1.jar "
+                        sh "cd target && curl -u ${the_use}:${the_pass} -XGET http://43.0.20.203:8082/artifactory/libs-snapshot-local/com/lidar/analytics/99-SNAPSHOT/analytics-99-20230110.082303-1.jar --output analytics-99-20230110.082303-1.jar "
+                        }
+                        thefile=sh (script: "cd target && ls | grep -i telemetry",
+                        returnStdout: true).trim()
+                        echo "------------------------------------------------------------"
+                        sh "cd target && java -cp simulator-99-20230110.082510-1.jar:${thefile}:analytics-99-20230110.082303-1.jar com.lidar.simulation.Simulator"
+                    }                
+                }
+            }
+            
+        }
+        
+        stage("release bulid img"){
+            when{
+                anyOf {
+                    branch "release/*"
+                    
+                }
+            }
+            steps{
+                echo "========executing bulid img========"
+                script{
+
+                    Ver_Br=sh (script: "echo $GIT_BRANCH | cut -d '/' -f2",
+                    returnStdout: true).trim()
+
+                    echo "${Ver_Br}"
+
+                    Ver_Calc=sh (script: "bash calc.sh ${Ver_Br}",
+                    returnStdout: true).trim()
+                    echo "${Ver_Calc}"
+
+                   
+                    echo "------------------------------------------------------------"
+                    
+                   sh "mvn versions:set -DnewVersion=${Ver_Calc}"
+                    echo "------------------------------------------------------------"
+                    
+                    sh "mvn dependency:list" 
+                    echo "------------------------------------------------------------"
+
+                    configFileProvider([configFile(fileId: 'my_settings.xml', variable: 'set')]) {
+                    sh "mvn -s ${set} versions:set-property -Dproperty=analytics.version -DnewVersion=${ver_analytics1}"
+                    sh "mvn -s ${set} deploy "
+                    sh "mvn dependency:list"
+                    }
+                   
+                    withCredentials([gitUsernamePassword(credentialsId: '2053d2c3-e0ab-4686-b031-9a1970106e8d', gitToolName: 'Default')]){
+                        sh "git tag $Ver_Calc"
+                        sh "git push origin $Ver_Calc"
+                    }
+                }
+            }
+        }
+    }
+    
+    
+    post{
+        success{
+            script{
+                echo "yes"
+               
+            }
+        }
+        failure {
+            
+            script{
+                echo "no"
+             }
+
+            
+        }
+    }
+}
