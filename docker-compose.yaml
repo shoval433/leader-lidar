@@ -1,0 +1,44 @@
+version: '3'
+services:
+  jenkins:
+    build: ./ci
+    ports:
+        - "50000:50000"
+        - "8080:8080"
+    restart: always
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+ 
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    restart: always
+    ports:
+        - "80:80"
+        - "443:443"
+        - "4300:22"
+    # hostname: 'gitlab.example.com'
+    # environment:
+    # environment:
+    #   GITLAB_OMNIBUS_CONFIG: |
+    #     external_url 'https://gitlab.example.com'
+    volumes:
+      - /home/ubuntu/gitlab/config:/etc/gitlab 
+      - /home/ubuntu/gitlab/data:/var/opt/gitlab
+      - /home/ubuntu/gitlab/logs:/var/log/gitlab
+    shm_size: '256m'
+  
+  artifactory:
+    image: docker.bintray.io/jfrog/artifactory-oss:latest 
+    restart: always
+    ports:
+      - "8081:8081"
+      - "8082:8082"
+    volumes:
+      - art_data:/var/opt/jfrog/artifactory
+
+
+volumes:
+  jenkins_home: 
+  art_data:  
+  
